@@ -82,6 +82,8 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
 .btn{font:500 13px/1 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer}
 .btn:hover{background:var(--surface-2);border-color:var(--muted)}
 .btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn kbd{font:500 10.5px/1 var(--font-mono);margin-left:6px;padding:1px 4px;border:1px solid var(--line);border-radius:3px;color:var(--muted)}
+.btn[aria-pressed="true"] kbd{color:inherit;border-color:currentColor}
 .btn:focus-visible,.pad:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 .readout{display:flex;align-items:flex-end;justify-content:space-between;gap:10px 16px;flex-wrap:wrap}
@@ -116,6 +118,8 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
 .pad canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .badge{position:absolute;top:10px;right:10px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:4px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
 .badge[data-tone="live"]{color:var(--accent);border-color:var(--accent)}
+.badge[data-tone="pause"]{color:var(--warn);border-color:var(--warn)}
+.mouse-pad[data-paused="true"]{border-style:dashed}
 .pad-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);margin:0;width:max-content;max-width:min(32ch,calc(100% - 32px));text-align:center;font-size:14px;font-weight:500;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px;pointer-events:none;transition:opacity .2s}
 .keys-row{position:absolute;left:10px;top:10px;right:190px;display:flex;flex-wrap:wrap;gap:4px;max-height:24px;overflow:hidden}
 .kc{font-family:var(--font-mono);font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
@@ -165,6 +169,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
         <span class="ch-tag">CH1</span>
         <h2 id="hMouse">Ratón</h2>
         <div class="ch-actions">
+          <button id="pauseMouse" class="btn" type="button" aria-pressed="false" aria-keyshortcuts="P"><span class="lbl">Pausar</span><kbd>P</kbd></button>
           <button id="lockBtn" class="btn" type="button" aria-pressed="false">Bloquear puntero</button>
           <button id="resetMouse" class="btn" type="button">Reiniciar</button>
         </div>
@@ -220,7 +225,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   <section class="notes" aria-labelledby="hNotes">
     <h2 id="hNotes">Cómo leer el resultado</h2>
     <ul>
-      <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que el número que importa es el máximo sostenido, no el instantáneo.</span></li>
+      <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que el número que importa es el máximo sostenido, no el instantáneo. Con «Pausar» (o la tecla P) congelas la lectura y puedes mover el ratón sin alterarla.</span></li>
       <li><b>Teclado</b><span>No envía datos de forma continua, por eso el valor se estima. Cuando presionas varias teclas casi a la vez, el tiempo entre eventos cae en múltiplos del intervalo de sondeo: 8 ms a 125 Hz, 1 ms a 1000 Hz. El histograma muestra esos picos.</span></li>
       <li><b>Inalámbricos</b><span>Muchos bajan la frecuencia para ahorrar batería. Prueba con cable o con el modo de rendimiento del software del fabricante.</span></li>
       <li><b>4000 y 8000 Hz</b><span>A esas frecuencias el navegador puede perder eventos y mostrar menos. Usa Chrome o Edge, cierra pestañas pesadas y prueba «Bloquear puntero».</span></li>
@@ -350,6 +355,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   const mHint = $('mHint'), mBadge = $('mBadge'), mNote = $('mNote'), lockBtn = $('lockBtn');
   const M = {};
   function resetM() {
+    if (mPaused) setPaused(false);
     Object.assign(M, { t: [], d: [], head: 0, last: null, lastCalc: -1e9, count: 0, motion: 0, rates: [], trace: [], current: null, sustained: null, detected: null, lastValid: -1e9 });
     mNow.textContent = '—'; mNow.classList.remove('stale');
     mPeak.textContent = '—'; mInt.textContent = '—'; mCount.textContent = '0';
@@ -361,6 +367,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     markRef();
   }
   let lockError = false;
+  let mPaused = false, pausedAt = 0;
   const noMouse = !matchMedia('(any-pointer: fine)').matches;
 
   // Reports per second over the 250 ms before `end`, counting only time spent moving.
@@ -396,6 +403,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   const SRC = { raw: 'eventos crudos', move: 'eventos agrupados', mouse: 'mousemove básico' };
   let src = null;
   function onPointer(e, kind) {
+    if (mPaused) return;
     if (e.pointerType && e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
     const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
     if (list && list.length) { for (const c of list) mSample(c.timeStamp); }
@@ -424,7 +432,8 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
 
   function updateMBadge() {
     const locked = mousePad.dataset.locked === 'true';
-    if (locked) { mBadge.hidden = false; mBadge.dataset.tone = 'live'; mBadge.textContent = 'Puntero bloqueado · Esc para salir'; }
+    if (mPaused) { mBadge.hidden = false; mBadge.dataset.tone = 'pause'; mBadge.textContent = 'En pausa · P para seguir'; }
+    else if (locked) { mBadge.hidden = false; mBadge.dataset.tone = 'live'; mBadge.textContent = 'Puntero bloqueado · Esc para salir'; }
     else if (M.count === 0) { mBadge.hidden = false; mBadge.dataset.tone = ''; mBadge.textContent = 'Ejemplo · ratón de 1000 Hz'; }
     else mBadge.hidden = true;
   }
@@ -550,6 +559,42 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     updateMBadge();
   });
   $('resetMouse').addEventListener('click', resetM);
+
+  /* Pause: ignore pointer input and freeze readouts and plot. On resume the
+     plot is shifted by the paused time so it continues where it stopped. */
+  const pauseBtn = $('pauseMouse');
+  function setPaused(p) {
+    if (p === mPaused) return;
+    mPaused = p;
+    const now = performance.now();
+    if (p) {
+      pausedAt = now;
+      M.current = null;
+      mHint.hidden = true;
+    } else {
+      const dur = now - pausedAt;
+      for (const pt of M.trace) pt.t += dur;
+      M.lastValid += dur;
+      M.t = []; M.d = []; M.head = 0; M.last = null; M.lastCalc = -1e9;
+      if (M.count === 0) mHint.hidden = false;
+    }
+    pauseBtn.setAttribute('aria-pressed', String(p));
+    pauseBtn.querySelector('.lbl').textContent = p ? 'Reanudar' : 'Pausar';
+    mousePad.dataset.paused = String(p);
+    updateMBadge();
+    mDirty = true;
+    announce(p ? 'Medición del ratón en pausa.' : 'Medición del ratón reanudada.');
+  }
+  pauseBtn.addEventListener('click', () => setPaused(!mPaused));
+  // P toggles pause without moving the mouse (works while the pointer is locked).
+  window.addEventListener('keydown', e => {
+    if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key !== 'p' && e.key !== 'P') return;
+    const a = document.activeElement;
+    if (a === keyPad || (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+    e.preventDefault();
+    setPaused(!mPaused);
+  });
 
   /* =========================================================
      CH2 · Teclado
@@ -723,10 +768,12 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   let lastUI = 0;
   function loop() {
     const now = performance.now();
-    mFrame(now);
-    if (mDirty || now - M.lastValid < 11000) { drawMouse(now); mDirty = false; }
+    if (!mPaused) {
+      mFrame(now);
+      if (mDirty || now - M.lastValid < 11000) { drawMouse(now); mDirty = false; }
+    } else if (mDirty) { drawMouse(pausedAt); mDirty = false; }
     if (kDirty) { drawKeys(); kDirty = false; }
-    if (now - lastUI > 120) { lastUI = now; mUI(); }
+    if (now - lastUI > 120) { lastUI = now; if (!mPaused) mUI(); }
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
