@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Medidor de polling rate</title>
-<meta name="description" content="Mide en el navegador cuántos Hz (polling rate) tienen tu ratón y tu teclado. Gráfica en vivo, histograma de intervalos y nada se envía a ningún servidor.">
+<meta name="description" content="Mide en el navegador cuántos Hz (polling rate) tienen tu ratón y tu teclado, y el DPI de tu ratón. Gráfica en vivo, histograma de intervalos y nada se envía a ningún servidor.">
 <meta name="theme-color" content="#E9EDF2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0D1015" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Medidor de polling rate">
-<meta property="og:description" content="¿A cuántos Hz va tu ratón y tu teclado? Mídelo en el navegador.">
+<meta property="og:description" content="¿A cuántos Hz va tu ratón y tu teclado, y cuántos DPI tiene tu ratón? Mídelo en el navegador.">
 <meta property="og:locale" content="es_CO">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -126,6 +126,26 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
 .kc{font-family:var(--font-mono);font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
 .ch-note{margin:-4px 0 0;font-size:13px;color:var(--muted);max-width:65ch}
 
+/* CH3 · DPI: full-width channel, readout + steps on the left, ruler pad on the right */
+.ch-wide{grid-column:1/-1}
+.dpi-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px 28px;align-items:start}
+@media (max-width:880px){.dpi-grid{grid-template-columns:minmax(0,1fr)}}
+.dpi-col{display:grid;gap:16px;align-content:start;min-width:0}
+.steps{margin:0;padding-left:1.4em;display:grid;gap:6px;font-size:14px;max-width:60ch}
+.steps li::marker{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.dpi-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.field{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.field input{width:5.5em;font:500 15px var(--font-mono);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:7px 8px}
+.field input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn.primary,.btn.primary:hover{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.dpi-pad{height:180px;display:grid;place-content:center;justify-items:center;gap:6px;padding:16px 16px 34px;text-align:center}
+.dpi-pad[data-state="measuring"]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.dpi-live{font:500 clamp(2rem,1.6rem + 1.6vw,2.8rem)/1 var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.dpi-pad[data-state="idle"] .dpi-live{color:var(--muted)}
+.dpi-sub{margin:0;font-size:13px;color:var(--muted);max-width:42ch}
+.ruler{position:absolute;left:0;right:0;bottom:0;height:16px;border-top:1px solid var(--line);background-image:repeating-linear-gradient(to right,var(--muted) 0 1px,transparent 1px 40px),repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px 8px);background-size:100% 10px,100% 6px;background-position:left top,left top;background-repeat:no-repeat}
+
 /* Notes */
 .notes{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px 48px;align-items:start;border-top:1px solid var(--line);padding-top:24px}
 @media (max-width:880px){.notes{grid-template-columns:minmax(0,1fr)}}
@@ -155,7 +175,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     <div class="top-text">
       <p class="eyebrow">Ratón y teclado · prueba en el navegador</p>
       <h1>Medidor de polling rate</h1>
-      <p class="lede">Mide cuántas veces por segundo (Hz) tu ratón y tu teclado le envían datos al computador. Todo se calcula aquí mismo; no se guarda ni se envía nada.</p>
+      <p class="lede">Mide cuántas veces por segundo (Hz) tu ratón y tu teclado le envían datos al computador, y cuántos DPI tiene tu ratón. Todo se calcula aquí mismo; no se guarda ni se envía nada.</p>
     </div>
     <dl class="sysinfo">
       <div><dt>Reloj del navegador</dt><dd id="clockRes">—</dd></div>
@@ -221,6 +241,49 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
       </div>
       <p class="ch-note" id="kNote" hidden></p>
     </section>
+
+    <!-- CH3 · DPI -->
+    <section class="ch ch-wide" aria-labelledby="hDpi">
+      <div class="ch-head">
+        <span class="ch-tag">CH3</span>
+        <h2 id="hDpi">DPI del ratón</h2>
+        <div class="ch-actions">
+          <button id="undoDpi" class="btn" type="button" disabled>Borrar última</button>
+          <button id="resetDpi" class="btn" type="button">Reiniciar</button>
+        </div>
+      </div>
+      <div class="dpi-grid">
+        <div class="dpi-col">
+          <div class="readout">
+            <div class="big"><span id="dNow" class="num">—</span><span class="unit">DPI</span></div>
+            <span id="dVerdict" class="verdict" data-state="idle">Sin medir</span>
+          </div>
+          <dl class="stats">
+            <div><dt>Última medición</dt><dd id="dLast">—</dd></div>
+            <div><dt>Mediciones</dt><dd id="dCount">0</dd></div>
+            <div><dt>Variación</dt><dd id="dSpread">—</dd></div>
+          </dl>
+          <ol class="steps">
+            <li>Pon una regla o cinta métrica sobre la mesa, junto al ratón.</li>
+            <li>Alinea el borde del ratón con el 0 y pulsa «Empezar medición».</li>
+            <li>Desliza el ratón en línea recta hasta la distancia elegida, sin levantarlo.</li>
+            <li>Haz clic (o pulsa Espacio) para terminar. Repite 3 veces para promediar.</li>
+          </ol>
+        </div>
+        <div class="dpi-col">
+          <div class="dpi-controls">
+            <label class="field" for="dpiDist">Distancia <input id="dpiDist" type="number" min="1" max="100" step="0.5" value="10" inputmode="decimal"> cm</label>
+            <button id="dpiStart" class="btn primary" type="button">Empezar medición</button>
+          </div>
+          <div class="pad dpi-pad" id="dpiPad" data-state="idle">
+            <span class="dpi-live" id="dLive" aria-live="off">—</span>
+            <p class="dpi-sub" id="dLiveSub">Alinea el ratón con el 0 de tu regla y pulsa «Empezar medición».</p>
+            <div class="ruler" aria-hidden="true"></div>
+          </div>
+          <p class="ch-note" id="dNote" hidden></p>
+        </div>
+      </div>
+    </section>
   </main>
 
   <section class="notes" aria-labelledby="hNotes">
@@ -228,6 +291,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     <ul>
       <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que la página guarda el pico más alto que registra y lo marca compatible con la frecuencia estándar más alta a la que llega al menos al 80 %. Por ejemplo, un pico de 850 Hz es compatible con 1000 Hz. Con «Pausar» (o la tecla P) congelas la lectura y puedes mover el ratón sin alterarla.</span></li>
       <li><b>Teclado</b><span>No envía datos de forma continua, por eso el valor se estima. Cuando presionas varias teclas casi a la vez, el tiempo entre eventos cae en múltiplos del intervalo de sondeo: 8 ms a 125 Hz, 1 ms a 1000 Hz. El histograma muestra esos picos.</span></li>
+      <li><b>DPI</b><span>El navegador no sabe cuánto se movió el ratón sobre la mesa, así que el DPI no se puede detectar solo: hay que moverlo una distancia conocida. La página suma los puntos que envía el ratón en ese trayecto y calcula DPI = puntos ÷ pulgadas (1 pulgada = 2,54 cm). Si el resultado no cuadra, desactiva «Mejorar la precisión del puntero» en Windows.</span></li>
       <li><b>Inalámbricos</b><span>Muchos bajan la frecuencia para ahorrar batería. Prueba con cable o con el modo de rendimiento del software del fabricante.</span></li>
       <li><b>4000 y 8000 Hz</b><span>A esas frecuencias el navegador puede perder eventos y mostrar menos. Usa Chrome o Edge, cierra pestañas pesadas y prueba «Bloquear puntero».</span></li>
       <li><b>Precisión</b><span>Depende del reloj del navegador (arriba). Es una medición desde el navegador, no una lectura del hardware; el valor configurado lo confirma el software del fabricante.</span></li>
@@ -379,6 +443,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     markRef();
   }
   let lockError = false;
+  let lockRequester = null;   // which channel asked for pointer lock: 'hz' or 'dpi'
   let mPaused = false, pausedAt = 0;
   const noMouse = !matchMedia('(any-pointer: fine)').matches;
 
@@ -566,12 +631,13 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   lockBtn.addEventListener('click', async () => {
     if (document.pointerLockElement === mousePad) { document.exitPointerLock(); return; }
     lockError = false;
+    lockRequester = 'hz';
     try { await mousePad.requestPointerLock({ unadjustedMovement: true }); }
     catch (err) {
       try { await mousePad.requestPointerLock(); } catch (err2) { lockFailed(); }
     }
   });
-  document.addEventListener('pointerlockerror', lockFailed);
+  document.addEventListener('pointerlockerror', () => { if (lockRequester === 'hz') lockFailed(); });
   document.addEventListener('pointerlockchange', () => {
     const locked = document.pointerLockElement === mousePad;
     mousePad.dataset.locked = String(locked);
@@ -777,6 +843,153 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     }
     ctx.globalAlpha = 1;
   }
+
+  /* =========================================================
+     CH3 · DPI
+     DPI = movement counts per inch. The browser can't know how far the
+     mouse travelled on the desk, so the user moves it a known distance
+     along a ruler while the pointer is locked (raw, unaccelerated input
+     where supported) and we add up the movement it reports.
+     ========================================================= */
+  const dpiPad = $('dpiPad'), dpiStart = $('dpiStart'), dpiDist = $('dpiDist');
+  const dNow = $('dNow'), dVerdict = $('dVerdict'), dLast = $('dLast'), dCount = $('dCount'), dSpread = $('dSpread');
+  const dNote = $('dNote'), dLive = $('dLive'), dLiveSub = $('dLiveSub'), undoDpi = $('undoDpi');
+  const COMMON_DPI = [400, 800, 1000, 1200, 1600, 2000, 2400, 3200, 4000, 6400, 8000, 12000, 16000, 26000];
+  const D = { measuring: false, sx: 0, sy: 0, raw: true, results: [] };
+
+  function nearestDpi(v) {
+    let best = null, bd = Infinity;
+    for (const s of COMMON_DPI) { const d = Math.abs(Math.log(v / s)); if (d < bd) { bd = d; best = s; } }
+    return bd <= Math.log(1.15) ? best : null;
+  }
+  function distCm() {
+    const v = parseFloat(String(dpiDist.value).replace(',', '.'));
+    return v >= 1 && v <= 100 ? v : null;
+  }
+  const cmText = v => fmt(v, Number.isInteger(v) ? 0 : 1) + ' cm';
+
+  function renderDpiLive() {
+    const st = dpiPad.dataset.state, last = D.results[D.results.length - 1];
+    if (st === 'measuring') {
+      dLive.textContent = fmt(Math.round(Math.hypot(D.sx, D.sy)));
+      dLiveSub.textContent = 'puntos · haz clic al llegar a ' + cmText(distCm()) + ' (Esc cancela)';
+    } else if (st === 'done' && last) {
+      dLive.textContent = fmt(Math.round(last.dpi)) + ' DPI';
+      dLiveSub.textContent = fmt(Math.round(last.counts)) + ' puntos en ' + cmText(last.cm) + '. Pulsa «Empezar medición» para repetir.';
+    } else {
+      dLive.textContent = '—';
+      dLiveSub.textContent = 'Alinea el ratón con el 0 de tu regla y pulsa «Empezar medición».';
+    }
+  }
+
+  function dUI() {
+    const n = D.results.length;
+    dCount.textContent = fmt(n);
+    undoDpi.disabled = n === 0 || D.measuring;
+    if (D.measuring) setVerdict(dVerdict, 'busy', 'Midiendo…');
+    if (!n) {
+      dNow.textContent = '—'; dLast.textContent = '—'; dSpread.textContent = '—';
+      if (!D.measuring) setVerdict(dVerdict, 'idle', 'Sin medir');
+      return;
+    }
+    const vals = D.results.map(r => r.dpi);
+    // Median from 3 passes on, so one bad pass doesn't drag the result.
+    const center = n >= 3 ? pct(vals, 0.5) : vals.reduce((a, b) => a + b, 0) / n;
+    const spread = ((Math.max(...vals) - Math.min(...vals)) / 2 / center) * 100;
+    dNow.textContent = fmt(Math.round(center));
+    dLast.textContent = fmt(Math.round(vals[n - 1])) + ' DPI';
+    dSpread.textContent = n > 1 ? '± ' + fmt(spread, 1) + ' %' : '—';
+    if (n > 1 && spread > 10 && !D.measuring) note(dNote, 'Las mediciones no coinciden (± ' + fmt(spread, 1) + ' %). Borra la que salió mal con «Borrar última» o repite la medición.');
+    if (!D.measuring) {
+      const near = nearestDpi(center);
+      if (near) setVerdict(dVerdict, 'ok', 'Cercano a ' + near + ' DPI');
+      else setVerdict(dVerdict, 'warn', 'Valor poco común');
+    }
+  }
+
+  function finishDpi() {
+    if (!D.measuring) return;
+    D.measuring = false;
+    const counts = Math.hypot(D.sx, D.sy), cm = distCm();
+    if (document.pointerLockElement === dpiPad) document.exitPointerLock();
+    if (counts < 20) {
+      dpiPad.dataset.state = 'idle';
+      note(dNote, 'No se registró movimiento. Desliza el ratón la distancia completa antes de hacer clic.');
+    } else {
+      const dpi = counts / (cm / 2.54);
+      D.results.push({ dpi, counts, cm, raw: D.raw });
+      dpiPad.dataset.state = 'done';
+      const msg = [];
+      if (!D.raw) msg.push('Este navegador no da movimiento crudo, así que la aceleración del sistema puede cambiar el resultado. En Windows, desactiva «Mejorar la precisión del puntero».');
+      if (D.results.length < 3) msg.push('Repite la medición para promediar: el resultado de una sola pasada depende de qué tan exacto te detengas.');
+      note(dNote, msg.join(' '));
+      announce('DPI: ' + fmt(Math.round(dpi)) + ' en esta medición.');
+    }
+    renderDpiLive(); dUI();
+  }
+
+  if (!('requestPointerLock' in dpiPad) || noMouse) {
+    dpiStart.disabled = true;
+    note(dNote, noMouse ? 'Para medir el DPI necesitas un ratón conectado.' : 'Este navegador no permite bloquear el puntero, y sin eso no se puede medir el DPI. Prueba en Chrome o Edge de escritorio.');
+  }
+  dpiStart.addEventListener('click', async () => {
+    if (!distCm()) { note(dNote, 'Escribe una distancia entre 1 y 100 cm.'); dpiDist.focus(); return; }
+    note(dNote, '');
+    // Move focus off the button so the Space/Enter that ends the pass can't press it again.
+    dpiStart.blur();
+    lockRequester = 'dpi';
+    D.raw = true;
+    try { await dpiPad.requestPointerLock({ unadjustedMovement: true }); }
+    catch (err) {
+      D.raw = false;
+      try { await dpiPad.requestPointerLock(); }
+      catch (err2) { note(dNote, 'El navegador no permitió bloquear el puntero, y sin eso no se puede medir el DPI. Prueba otra vez o usa Chrome o Edge de escritorio.'); }
+    }
+  });
+  document.addEventListener('pointerlockerror', () => {
+    if (lockRequester === 'dpi') note(dNote, 'El navegador no permitió bloquear el puntero, y sin eso no se puede medir el DPI. Prueba otra vez o usa Chrome o Edge de escritorio.');
+  });
+  document.addEventListener('pointerlockchange', () => {
+    const locked = document.pointerLockElement === dpiPad;
+    if (locked && !D.measuring) {
+      D.measuring = true; D.sx = 0; D.sy = 0;
+      dpiPad.dataset.state = 'measuring';
+    } else if (!locked && D.measuring) {
+      // Left the lock without finishing (Esc): cancel this pass.
+      D.measuring = false;
+      dpiPad.dataset.state = 'idle';
+      note(dNote, 'Medición cancelada. Pulsa «Empezar medición» para intentarlo de nuevo.');
+    }
+    renderDpiLive(); dUI();
+  });
+  // Movement while locked. Browsers add up the movement of merged events, so
+  // the dispatched event carries the full delta.
+  document.addEventListener('mousemove', e => {
+    if (!D.measuring) return;
+    D.sx += e.movementX || 0; D.sy += e.movementY || 0;
+    dLive.textContent = fmt(Math.round(Math.hypot(D.sx, D.sy)));
+  });
+  dpiPad.addEventListener('mousedown', e => { if (D.measuring) { e.preventDefault(); finishDpi(); } });
+  let swallowKeyUp = null;
+  document.addEventListener('keydown', e => {
+    if (D.measuring && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); swallowKeyUp = e.key; finishDpi(); }
+  }, true);
+  document.addEventListener('keyup', e => {
+    if (swallowKeyUp && e.key === swallowKeyUp) { e.preventDefault(); swallowKeyUp = null; }
+  }, true);
+  undoDpi.addEventListener('click', () => {
+    D.results.pop();
+    dpiPad.dataset.state = D.results.length ? 'done' : 'idle';
+    note(dNote, '');
+    renderDpiLive(); dUI();
+  });
+  $('resetDpi').addEventListener('click', () => {
+    if (D.measuring) { D.measuring = false; if (document.pointerLockElement === dpiPad) document.exitPointerLock(); }
+    D.results = [];
+    dpiPad.dataset.state = 'idle';
+    if (!dpiStart.disabled) note(dNote, '');
+    renderDpiLive(); dUI();
+  });
 
   /* ---------- Loop ---------- */
   if ('ResizeObserver' in window) {
