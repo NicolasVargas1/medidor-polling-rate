@@ -104,6 +104,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
 .tick.on{color:var(--accent);font-weight:600}
 .tick.on::before{width:3px;margin-left:-1px;background:var(--accent)}
 .marker{position:absolute;top:3px;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--surface);border:2px solid var(--accent);transition:left .12s linear}
+.peak-mark{position:absolute;top:0;width:3px;height:17px;margin-left:-1.5px;border-radius:1px;background:var(--accent)}
 
 .stats{margin:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;border-top:1px solid var(--line);padding-top:14px}
 .stats div{display:grid;gap:2px;align-content:start;min-width:0}
@@ -180,8 +181,8 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
       </div>
       <div class="scale" id="mScale" aria-hidden="true"></div>
       <dl class="stats">
-        <div><dt>Máximo sostenido</dt><dd id="mPeak">—</dd></div>
-        <div><dt>Intervalo</dt><dd id="mInt">—</dd></div>
+        <div><dt>Intervalo mínimo</dt><dd id="mInt">—</dd></div>
+        <div><dt>En movimiento</dt><dd id="mMotion">0,0 s</dd></div>
         <div><dt>Eventos</dt><dd id="mCount">0</dd></div>
       </dl>
       <div class="pad mouse-pad" id="mousePad" data-locked="false">
@@ -225,7 +226,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   <section class="notes" aria-labelledby="hNotes">
     <h2 id="hNotes">Cómo leer el resultado</h2>
     <ul>
-      <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que el número que importa es el máximo sostenido, no el instantáneo. Con «Pausar» (o la tecla P) congelas la lectura y puedes mover el ratón sin alterarla.</span></li>
+      <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que la página guarda el pico más alto que registra: muévelo rápido unos segundos y ese pico es tu frecuencia real. Con «Pausar» (o la tecla P) congelas la lectura y puedes mover el ratón sin alterarla.</span></li>
       <li><b>Teclado</b><span>No envía datos de forma continua, por eso el valor se estima. Cuando presionas varias teclas casi a la vez, el tiempo entre eventos cae en múltiplos del intervalo de sondeo: 8 ms a 125 Hz, 1 ms a 1000 Hz. El histograma muestra esos picos.</span></li>
       <li><b>Inalámbricos</b><span>Muchos bajan la frecuencia para ahorrar batería. Prueba con cable o con el modo de rendimiento del software del fabricante.</span></li>
       <li><b>4000 y 8000 Hz</b><span>A esas frecuencias el navegador puede perder eventos y mostrar menos. Usa Chrome o Edge, cierra pestañas pesadas y prueba «Bloquear puntero».</span></li>
@@ -293,7 +294,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   let mDirty = true, kDirty = true;
   function readColors() {
     const s = getComputedStyle(document.documentElement);
-    for (const k of ['ink', 'muted', 'line', 'grid', 'accent', 'accent-soft']) C[k] = s.getPropertyValue('--' + k).trim() || '#888';
+    for (const k of ['ink', 'muted', 'line', 'grid', 'accent', 'accent-soft', 'surface-2']) C[k] = s.getPropertyValue('--' + k).trim() || '#888';
     mDirty = kDirty = true;
   }
   readColors();
@@ -331,13 +332,16 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
   const mScale = $('mScale'), kScale = $('kScale');
   const mMarker = buildScale(mScale);
   buildScale(kScale);
+  // Max-hold needle for the mouse peak, drawn under the live marker.
+  const mPeakMark = document.createElement('span');
+  mPeakMark.className = 'peak-mark'; mPeakMark.hidden = true;
+  mScale.insertBefore(mPeakMark, mMarker);
 
   function markRef() {
     for (const tr of document.querySelectorAll('#refTable tbody tr')) {
       const hz = +tr.dataset.hz, cell = tr.querySelector('.meas');
       cell.textContent = '';
       const hits = [];
-      if (M.detected === hz) hits.push('CH1');
       if (K.est && K.est.state === 'ok' && K.est.hz === hz) hits.push('CH2');
       for (const h of hits) { const s = document.createElement('span'); s.className = 'tag'; s.textContent = h; cell.appendChild(s); }
       tr.classList.toggle('on', hits.length > 0);
@@ -351,15 +355,15 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
      sliding 250 ms window; gaps over 25 ms count as pauses.
      ========================================================= */
   const mousePad = $('mousePad'), mCanvas = $('mCanvas');
-  const mNow = $('mNow'), mVerdict = $('mVerdict'), mPeak = $('mPeak'), mInt = $('mInt'), mCount = $('mCount');
+  const mNow = $('mNow'), mVerdict = $('mVerdict'), mInt = $('mInt'), mMotion = $('mMotion'), mCount = $('mCount');
   const mHint = $('mHint'), mBadge = $('mBadge'), mNote = $('mNote'), lockBtn = $('lockBtn');
   const M = {};
   function resetM() {
     if (mPaused) setPaused(false);
-    Object.assign(M, { t: [], d: [], head: 0, last: null, lastCalc: -1e9, count: 0, motion: 0, rates: [], trace: [], current: null, sustained: null, detected: null, lastValid: -1e9 });
+    Object.assign(M, { t: [], d: [], head: 0, last: null, lastCalc: -1e9, count: 0, motion: 0, peak: 0, announced: 0, drawnPeak: 0, trace: [], current: null, lastValid: -1e9 });
     mNow.textContent = '—'; mNow.classList.remove('stale');
-    mPeak.textContent = '—'; mInt.textContent = '—'; mCount.textContent = '0';
-    mMarker.hidden = true; markScale(mScale, null);
+    mInt.textContent = '—'; mMotion.textContent = fmt(0, 1) + ' s'; mCount.textContent = '0';
+    mMarker.hidden = true; mPeakMark.hidden = true;
     setVerdict(mVerdict, 'idle', 'Sin medir');
     mHint.hidden = false; updateMBadge();
     if (!lockError) note(mNote, noMouse ? 'No se detecta un ratón en este dispositivo. Conecta uno para medirlo.' : '');
@@ -393,8 +397,7 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
       M.lastCalc = ts;
       const r = windowRate(ts);
       if (r !== null) {
-        M.rates.push(r);
-        if (M.rates.length > 2000) M.rates.splice(0, M.rates.length - 2000);
+        if (r > M.peak) M.peak = r;
         M.trace.push({ t: ts, hz: r });
         M.lastValid = performance.now();
       }
@@ -446,27 +449,21 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
       if (!mHint.hidden) { mHint.hidden = true; updateMBadge(); }
     } else if (M.count) mNow.classList.add('stale');
     mCount.textContent = fmt(M.count);
+    mMotion.textContent = fmt(M.motion / 1000, 1) + ' s';
 
-    if (M.rates.length >= 20) {
-      M.sustained = pct(M.rates, 0.95);
-      mPeak.textContent = fmt(M.sustained) + ' Hz';
-      mInt.textContent = msText(1000 / M.sustained);
-    }
-    let state = 'idle', text = 'Sin medir', det = null;
-    if (M.count) { state = 'busy'; text = 'Midiendo…'; }
-    if (M.motion >= 1500 && M.sustained) {
-      det = snap(M.sustained, 1.2);
-      if (det) { state = 'ok'; text = 'Detectado: ' + det + ' Hz'; }
-      else { state = 'warn'; text = '≈ ' + fmt(M.sustained) + ' Hz · no estándar'; }
-    }
+    // The result is the highest rate recorded, not a value rounded to a standard rate.
+    let state = 'idle', text = 'Sin medir';
+    if (M.peak) {
+      state = 'ok'; text = 'Pico máximo: ' + fmt(M.peak) + ' Hz';
+      mInt.textContent = msText(1000 / M.peak);
+      mPeakMark.hidden = false; mPeakMark.style.left = pos(M.peak) + '%';
+    } else if (M.count) { state = 'busy'; text = 'Midiendo…'; }
     setVerdict(mVerdict, state, text);
-    if (!lockError) {
-      if (state === 'warn') note(mNote, 'El valor no coincide con una frecuencia estándar. Mueve el ratón más rápido y en círculos amplios, o prueba «Bloquear puntero».');
-      else if (!noMouse || M.count) note(mNote, '');
-    }
-    if (det !== M.detected) {
-      M.detected = det; markScale(mScale, det); markRef(); mDirty = true;
-      if (det) announce('Ratón: ' + det + ' Hz detectados.');
+    if (!lockError && (!noMouse || M.count)) note(mNote, '');
+    if (M.peak !== M.drawnPeak) { M.drawnPeak = M.peak; mDirty = true; }
+    if (cur === null && M.peak && M.peak !== M.announced) {
+      M.announced = M.peak;
+      announce('Ratón: pico máximo de ' + fmt(M.peak) + ' Hz.');
     }
   }
 
@@ -495,13 +492,19 @@ h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;fo
     ctx.font = MONO; ctx.lineWidth = 1;
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     for (const s of STD) {
-      const yy = Math.round(y(s)) + 0.5, on = s === M.detected;
-      ctx.strokeStyle = on ? C.accent : C.grid; ctx.setLineDash(on ? [5, 4] : []);
-      hline(ctx, L, L + pw, yy);
-      ctx.fillStyle = on ? C.accent : C.muted; ctx.fillText(String(s), L - 8, yy);
+      const yy = Math.round(y(s)) + 0.5;
+      ctx.strokeStyle = C.grid; hline(ctx, L, L + pw, yy);
+      ctx.fillStyle = C.muted; ctx.fillText(String(s), L - 8, yy);
     }
-    ctx.setLineDash([]);
     ctx.strokeStyle = C.line; hline(ctx, L, L + pw, T + ph + 0.5);
+    // Max-hold line at the recorded peak.
+    if (M.peak && M.count) {
+      const yy = Math.round(y(M.peak)) + 0.5, label = 'pico ' + fmt(M.peak) + ' Hz';
+      ctx.strokeStyle = C.accent; ctx.setLineDash([5, 4]); hline(ctx, L, L + pw, yy); ctx.setLineDash([]);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.strokeStyle = C['surface-2']; ctx.strokeText(label, L + 6, yy - 3);
+      ctx.lineWidth = 1; ctx.fillStyle = C.accent; ctx.fillText(label, L + 6, yy - 3);
+    }
     ctx.textBaseline = 'alphabetic'; ctx.fillStyle = C.muted;
     ctx.textAlign = 'left'; ctx.fillText('−10 s', L, h - 7);
     ctx.textAlign = 'center'; ctx.fillText('−5 s', L + pw / 2, h - 7);
