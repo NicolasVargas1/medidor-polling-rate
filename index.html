@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Medidor de polling rate</title>
+<meta name="description" content="Mide en el navegador cuántos Hz (polling rate) tienen tu ratón y tu teclado. Gráfica en vivo, histograma de intervalos y nada se envía a ningún servidor.">
+<meta name="theme-color" content="#E9EDF2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0D1015" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Medidor de polling rate">
+<meta property="og:description" content="¿A cuántos Hz va tu ratón y tu teclado? Mídelo en el navegador.">
+<meta property="og:locale" content="es_CO">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Base reset */
+:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+</style>
+<style>
+/* Layout: a test bench with two instrument channels (CH1 ratón, CH2 teclado) side by side, stacked under 880px.
+   Each channel reads top-down: live readout → log scale of standard rates → stats → live plot that doubles as the test pad. Reference notes follow. */
+:root{
+  --bg:#E9EDF2;
+  --surface:#FBFCFD;
+  --surface-2:#F1F4F8;
+  --ink:#111723;
+  --muted:#566173;
+  --line:#CFD7E2;
+  --grid:#E1E7EF;
+  --accent:#1E44D4;
+  --accent-ink:#FFFFFF;
+  --accent-soft:rgba(30,68,212,.12);
+  --warn:#9A5600;
+  --font-display:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1015; --surface:#151920; --surface-2:#1A1F28; --ink:#E5E9EF; --muted:#98A3B4;
+    --line:#2A313C; --grid:#212732; --accent:#829AFF; --accent-ink:#0D1015;
+    --accent-soft:rgba(130,154,255,.16); --warn:#E5A752; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1015; --surface:#151920; --surface-2:#1A1F28; --ink:#E5E9EF; --muted:#98A3B4;
+  --line:#2A313C; --grid:#212732; --accent:#829AFF; --accent-ink:#0D1015;
+  --accent-soft:rgba(130,154,255,.16); --warn:#E5A752; color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding-block:32px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:28px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Header */
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:20px 32px}
+.top-text{display:grid;gap:8px;max-width:62ch;min-width:0}
+.eyebrow{margin:0;font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{margin:0;font-family:var(--font-display);font-stretch:118%;font-weight:760;font-size:clamp(1.9rem,1.2rem + 2.6vw,2.9rem);line-height:1.02;letter-spacing:-.01em;text-wrap:balance}
+.lede{margin:0;color:var(--muted);font-size:1rem;max-width:60ch}
+.sysinfo{margin:0;display:flex;flex-wrap:wrap;gap:8px 24px;font-family:var(--font-mono);font-size:12.5px}
+.sysinfo div{display:grid;gap:2px}
+.sysinfo dt,.stats dt{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.sysinfo dd{margin:0;font-weight:500}
+
+/* Channels */
+.channels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+@media (max-width:880px){.channels{grid-template-columns:minmax(0,1fr)}}
+.ch{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;display:grid;gap:16px;align-content:start;min-width:0}
+.ch-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ch-tag{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;padding:2px 7px;border:1px solid var(--ink);border-radius:4px}
+h2{margin:0;font-family:var(--font-display);font-stretch:112%;font-weight:700;font-size:1.25rem;letter-spacing:-.005em;text-wrap:balance}
+.ch-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:500 13px/1 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer}
+.btn:hover{background:var(--surface-2);border-color:var(--muted)}
+.btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn:focus-visible,.pad:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.readout{display:flex;align-items:flex-end;justify-content:space-between;gap:10px 16px;flex-wrap:wrap}
+.big{display:flex;align-items:baseline;gap:8px;font-family:var(--font-mono);font-variant-numeric:tabular-nums;min-width:0}
+.num{font-size:clamp(3rem,2.2rem + 3vw,4.4rem);font-weight:500;line-height:.95;letter-spacing:-.03em}
+.num.stale{color:var(--muted)}
+.unit{font-size:1.1rem;font-weight:500;color:var(--muted)}
+.verdict{font-family:var(--font-mono);font-size:12.5px;font-weight:500;padding:6px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.verdict[data-state="busy"]{color:var(--ink);background:var(--surface-2)}
+.verdict[data-state="ok"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.verdict[data-state="warn"]{color:var(--warn);border-color:currentColor}
+
+/* Log scale of standard rates */
+.scale{position:relative;height:36px;margin-inline:4px}
+.scale::before{content:"";position:absolute;left:0;right:0;top:8px;height:1px;background:var(--line)}
+.tick{position:absolute;top:0;transform:translateX(-50%);padding-top:16px;font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted);line-height:1.2}
+.tick::before{content:"";position:absolute;left:50%;top:3px;width:1px;height:11px;background:var(--line)}
+.tick.on{color:var(--accent);font-weight:600}
+.tick.on::before{width:3px;margin-left:-1px;background:var(--accent)}
+.marker{position:absolute;top:3px;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--surface);border:2px solid var(--accent);transition:left .12s linear}
+
+.stats{margin:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;border-top:1px solid var(--line);padding-top:14px}
+.stats div{display:grid;gap:2px;align-content:start;min-width:0}
+.stats dd{margin:0;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:15px;font-weight:500}
+
+/* Pads */
+.pad{position:relative;height:250px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden;touch-action:none}
+.mouse-pad{cursor:crosshair}
+.mouse-pad[data-locked="true"]{border-color:var(--accent)}
+.key-pad{cursor:pointer}
+.key-pad[data-armed="true"]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);cursor:default}
+.pad canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.badge{position:absolute;top:10px;right:10px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:4px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.badge[data-tone="live"]{color:var(--accent);border-color:var(--accent)}
+.pad-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);margin:0;width:max-content;max-width:min(32ch,calc(100% - 32px));text-align:center;font-size:14px;font-weight:500;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px;pointer-events:none;transition:opacity .2s}
+.keys-row{position:absolute;left:10px;top:10px;right:190px;display:flex;flex-wrap:wrap;gap:4px;max-height:24px;overflow:hidden}
+.kc{font-family:var(--font-mono);font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
+.ch-note{margin:-4px 0 0;font-size:13px;color:var(--muted);max-width:65ch}
+
+/* Notes */
+.notes{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px 48px;align-items:start;border-top:1px solid var(--line);padding-top:24px}
+@media (max-width:880px){.notes{grid-template-columns:minmax(0,1fr)}}
+.notes > h2{grid-column:1/-1}
+.notes ul{margin:0;padding:0;list-style:none;display:grid;gap:14px;max-width:70ch}
+.notes li{display:grid;grid-template-columns:8.5rem minmax(0,1fr);gap:2px 16px}
+@media (max-width:520px){.notes li{grid-template-columns:minmax(0,1fr)}}
+.notes li b{font-family:var(--font-display);font-stretch:108%;font-weight:650}
+.notes li span{color:var(--ink)}
+.ref-box{min-width:0;overflow-x:auto}
+.ref{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:13px}
+.ref caption{caption-side:bottom;text-align:left;padding-top:10px;font-family:var(--font-body);font-size:13px;color:var(--muted)}
+.ref th,.ref td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.ref th:first-child,.ref td:first-child{text-align:left}
+.ref thead th{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.ref tr.on td:not(.meas){color:var(--accent);font-weight:600}
+.meas{display:flex;justify-content:flex-end;gap:4px;min-height:1.95em;align-items:center}
+.tag{font-size:10.5px;font-weight:600;letter-spacing:.05em;padding:1px 6px;border-radius:4px;background:var(--accent);color:var(--accent-ink)}
+
+@media (prefers-reduced-motion: reduce){.marker,.pad-hint{transition:none}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="top-text">
+      <p class="eyebrow">Ratón y teclado · prueba en el navegador</p>
+      <h1>Medidor de polling rate</h1>
+      <p class="lede">Mide cuántas veces por segundo (Hz) tu ratón y tu teclado le envían datos al computador. Todo se calcula aquí mismo; no se guarda ni se envía nada.</p>
+    </div>
+    <dl class="sysinfo">
+      <div><dt>Reloj del navegador</dt><dd id="clockRes">—</dd></div>
+      <div><dt>Lectura del ratón</dt><dd id="srcInfo">—</dd></div>
+    </dl>
+  </header>
+
+  <main class="channels">
+    <!-- CH1 · Ratón -->
+    <section class="ch" aria-labelledby="hMouse">
+      <div class="ch-head">
+        <span class="ch-tag">CH1</span>
+        <h2 id="hMouse">Ratón</h2>
+        <div class="ch-actions">
+          <button id="lockBtn" class="btn" type="button" aria-pressed="false">Bloquear puntero</button>
+          <button id="resetMouse" class="btn" type="button">Reiniciar</button>
+        </div>
+      </div>
+      <div class="readout">
+        <div class="big"><span id="mNow" class="num">—</span><span class="unit">Hz ahora</span></div>
+        <span id="mVerdict" class="verdict" data-state="idle">Sin medir</span>
+      </div>
+      <div class="scale" id="mScale" aria-hidden="true"></div>
+      <dl class="stats">
+        <div><dt>Máximo sostenido</dt><dd id="mPeak">—</dd></div>
+        <div><dt>Intervalo</dt><dd id="mInt">—</dd></div>
+        <div><dt>Eventos</dt><dd id="mCount">0</dd></div>
+      </dl>
+      <div class="pad mouse-pad" id="mousePad" data-locked="false">
+        <canvas id="mCanvas" role="img" aria-label="Gráfica de los Hz del ratón en los últimos 10 segundos, en escala logarítmica"></canvas>
+        <span class="badge" id="mBadge">Ejemplo · ratón de 1000 Hz</span>
+        <p class="pad-hint" id="mHint">Mueve el ratón rápido, en círculos, durante 3 a 5 segundos.</p>
+      </div>
+      <p class="ch-note" id="mNote" hidden></p>
+    </section>
+
+    <!-- CH2 · Teclado -->
+    <section class="ch" aria-labelledby="hKeys">
+      <div class="ch-head">
+        <span class="ch-tag">CH2</span>
+        <h2 id="hKeys">Teclado</h2>
+        <div class="ch-actions">
+          <button id="resetKeys" class="btn" type="button">Reiniciar</button>
+        </div>
+      </div>
+      <div class="readout">
+        <div class="big"><span id="kNow" class="num">—</span><span class="unit">Hz estimados</span></div>
+        <span id="kVerdict" class="verdict" data-state="idle">Sin medir</span>
+      </div>
+      <div class="scale" id="kScale" aria-hidden="true"></div>
+      <dl class="stats">
+        <div><dt>Confianza</dt><dd id="kConf">—</dd></div>
+        <div><dt>Intervalos útiles</dt><dd id="kUseful">0 / 20</dd></div>
+        <div><dt>Eventos</dt><dd id="kEvents">0</dd></div>
+      </dl>
+      <div class="pad key-pad" id="keyPad" tabindex="0" role="application" data-armed="false"
+           aria-label="Zona de prueba del teclado. Presiona varias teclas a la vez. Tab o Escape para salir.">
+        <canvas id="kCanvas" role="img" aria-label="Histograma de los intervalos entre eventos del teclado, de 0 a 17 milisegundos"></canvas>
+        <div class="keys-row" id="kKeys" aria-hidden="true"></div>
+        <span class="badge" id="kBadge">Ejemplo · teclado de 125 Hz</span>
+        <p class="pad-hint" id="kHint">Haz clic aquí para activar la prueba del teclado.</p>
+      </div>
+      <p class="ch-note" id="kNote" hidden></p>
+    </section>
+  </main>
+
+  <section class="notes" aria-labelledby="hNotes">
+    <h2 id="hNotes">Cómo leer el resultado</h2>
+    <ul>
+      <li><b>Ratón</b><span>Solo envía datos mientras se mueve. Si lo mueves despacio la lectura baja, así que el número que importa es el máximo sostenido, no el instantáneo.</span></li>
+      <li><b>Teclado</b><span>No envía datos de forma continua, por eso el valor se estima. Cuando presionas varias teclas casi a la vez, el tiempo entre eventos cae en múltiplos del intervalo de sondeo: 8 ms a 125 Hz, 1 ms a 1000 Hz. El histograma muestra esos picos.</span></li>
+      <li><b>Inalámbricos</b><span>Muchos bajan la frecuencia para ahorrar batería. Prueba con cable o con el modo de rendimiento del software del fabricante.</span></li>
+      <li><b>4000 y 8000 Hz</b><span>A esas frecuencias el navegador puede perder eventos y mostrar menos. Usa Chrome o Edge, cierra pestañas pesadas y prueba «Bloquear puntero».</span></li>
+      <li><b>Precisión</b><span>Depende del reloj del navegador (arriba). Es una medición desde el navegador, no una lectura del hardware; el valor configurado lo confirma el software del fabricante.</span></li>
+    </ul>
+    <div class="ref-box">
+      <table class="ref" id="refTable">
+        <thead><tr><th scope="col">Frecuencia</th><th scope="col">Intervalo</th><th scope="col">Medido</th></tr></thead>
+        <tbody>
+          <tr data-hz="125"><td>125 Hz</td><td>8 ms</td><td class="meas"></td></tr>
+          <tr data-hz="250"><td>250 Hz</td><td>4 ms</td><td class="meas"></td></tr>
+          <tr data-hz="500"><td>500 Hz</td><td>2 ms</td><td class="meas"></td></tr>
+          <tr data-hz="1000"><td>1000 Hz</td><td>1 ms</td><td class="meas"></td></tr>
+          <tr data-hz="2000"><td>2000 Hz</td><td>0,5 ms</td><td class="meas"></td></tr>
+          <tr data-hz="4000"><td>4000 Hz</td><td>0,25 ms</td><td class="meas"></td></tr>
+          <tr data-hz="8000"><td>8000 Hz</td><td>0,125 ms</td><td class="meas"></td></tr>
+        </tbody>
+        <caption>Intervalo = 1000 ÷ Hz. 125 Hz es el valor por defecto de muchos teclados y ratones USB; 1000 Hz es habitual en equipos para juegos.</caption>
+      </table>
+    </div>
+  </section>
+
+  <p class="sr-only" aria-live="polite" id="live"></p>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const STD = [125, 250, 500, 1000, 2000, 4000, 8000];
+  const $ = id => document.getElementById(id);
+  const nf = {};
+  const fmt = (v, d = 0) => (nf[d] || (nf[d] = new Intl.NumberFormat('es-CO', { useGrouping: false, minimumFractionDigits: d, maximumFractionDigits: d }))).format(v);
+  const msText = ms => fmt(ms, ms < 0.2 ? 3 : ms < 10 ? 2 : 1) + ' ms';
+  const pos = v => Math.max(0, Math.min(100, (Math.log10(v) - 2) / 2 * 100));
+
+  function snap(hz, ratio) {
+    let best = null, bd = Infinity;
+    for (const s of STD) { const d = Math.abs(Math.log(hz / s)); if (d < bd) { bd = d; best = s; } }
+    return bd <= Math.log(ratio) ? best : null;
+  }
+  function pct(arr, p) {
+    const a = arr.slice().sort((x, y) => x - y);
+    return a[Math.min(a.length - 1, Math.round(p * (a.length - 1)))];
+  }
+  function note(el, text) { el.textContent = text || ''; el.hidden = !text; }
+  function setVerdict(el, state, text) {
+    if (el.dataset.state !== state) el.dataset.state = state;
+    if (el.textContent !== text) el.textContent = text;
+  }
+  const live = $('live');
+  function announce(text) { live.textContent = text; }
+
+  /* ---------- Clock resolution ---------- */
+  function measureRes() {
+    let min = Infinity, last = performance.now(), n;
+    const end = last + 30;
+    while ((n = performance.now()) < end) { const d = n - last; if (d > 1e-6 && d < min) min = d; last = n; }
+    return Number.isFinite(min) ? min : 0.1;
+  }
+  const RES = Math.max(0.001, measureRes());
+  $('clockRes').textContent = RES < 1 ? fmt(Math.round(RES * 1000)) + ' µs' : fmt(RES, 1) + ' ms';
+
+  /* ---------- Theme colors for canvas ---------- */
+  const C = {};
+  let mDirty = true, kDirty = true;
+  function readColors() {
+    const s = getComputedStyle(document.documentElement);
+    for (const k of ['ink', 'muted', 'line', 'grid', 'accent', 'accent-soft']) C[k] = s.getPropertyValue('--' + k).trim() || '#888';
+    mDirty = kDirty = true;
+  }
+  readColors();
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  if (mq.addEventListener) mq.addEventListener('change', readColors);
+  new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { mDirty = kDirty = true; });
+
+  function fitCanvas(c) {
+    const r = c.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w: r.width, h: r.height };
+  }
+  function hline(ctx, x0, x1, y) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+  function vline(ctx, x, y0, y1) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
+  const MONO = '500 10.5px "IBM Plex Mono", ui-monospace, monospace';
+
+  /* ---------- Scales ---------- */
+  function buildScale(el) {
+    for (const s of STD) {
+      const t = document.createElement('span');
+      t.className = 'tick'; t.dataset.hz = s; t.style.left = pos(s) + '%'; t.textContent = s;
+      el.appendChild(t);
+    }
+    const mk = document.createElement('span');
+    mk.className = 'marker'; mk.hidden = true;
+    el.appendChild(mk);
+    return mk;
+  }
+  function markScale(el, hz) { for (const t of el.querySelectorAll('.tick')) t.classList.toggle('on', +t.dataset.hz === hz); }
+  const mScale = $('mScale'), kScale = $('kScale');
+  const mMarker = buildScale(mScale);
+  buildScale(kScale);
+
+  function markRef() {
+    for (const tr of document.querySelectorAll('#refTable tbody tr')) {
+      const hz = +tr.dataset.hz, cell = tr.querySelector('.meas');
+      cell.textContent = '';
+      const hits = [];
+      if (M.detected === hz) hits.push('CH1');
+      if (K.est && K.est.state === 'ok' && K.est.hz === hz) hits.push('CH2');
+      for (const h of hits) { const s = document.createElement('span'); s.className = 'tag'; s.textContent = h; cell.appendChild(s); }
+      tr.classList.toggle('on', hits.length > 0);
+    }
+  }
+
+  /* =========================================================
+     CH1 · Ratón
+     Each pointer report carries its own timestamp (coalesced events keep
+     the original OS time). Rate = reports / time spent moving, over a
+     sliding 250 ms window; gaps over 25 ms count as pauses.
+     ========================================================= */
+  const mousePad = $('mousePad'), mCanvas = $('mCanvas');
+  const mNow = $('mNow'), mVerdict = $('mVerdict'), mPeak = $('mPeak'), mInt = $('mInt'), mCount = $('mCount');
+  const mHint = $('mHint'), mBadge = $('mBadge'), mNote = $('mNote'), lockBtn = $('lockBtn');
+  const M = {};
+  function resetM() {
+    Object.assign(M, { t: [], d: [], head: 0, last: null, lastCalc: -1e9, count: 0, motion: 0, rates: [], trace: [], current: null, sustained: null, detected: null, lastValid: -1e9 });
+    mNow.textContent = '—'; mNow.classList.remove('stale');
+    mPeak.textContent = '—'; mInt.textContent = '—'; mCount.textContent = '0';
+    mMarker.hidden = true; markScale(mScale, null);
+    setVerdict(mVerdict, 'idle', 'Sin medir');
+    mHint.hidden = false; updateMBadge();
+    if (!lockError) note(mNote, noMouse ? 'No se detecta un ratón en este dispositivo. Conecta uno para medirlo.' : '');
+    mDirty = true;
+    markRef();
+  }
+  let lockError = false;
+  const noMouse = !matchMedia('(any-pointer: fine)').matches;
+
+  // Reports per second over the 250 ms before `end`, counting only time spent moving.
+  function windowRate(end) {
+    let sum = 0, n = 0;
+    const w0 = end - 250;
+    for (let i = M.t.length - 1; i >= M.head; i--) {
+      const t = M.t[i];
+      if (t > end) continue;
+      if (t < w0) break;
+      sum += M.d[i]; n++;
+    }
+    return n >= 8 && sum >= 60 ? (n * 1000) / sum : null;
+  }
+  function mSample(ts) {
+    if (M.last !== null) {
+      const dt = ts - M.last;
+      if (dt >= 0 && dt < 25) { M.t.push(ts); M.d.push(dt); M.motion += dt; }
+    }
+    M.last = ts; M.count++;
+    // Sample the rate every 50 ms of input time, independent of the screen's frame rate.
+    if (ts - M.lastCalc >= 50) {
+      M.lastCalc = ts;
+      const r = windowRate(ts);
+      if (r !== null) {
+        M.rates.push(r);
+        if (M.rates.length > 2000) M.rates.splice(0, M.rates.length - 2000);
+        M.trace.push({ t: ts, hz: r });
+        M.lastValid = performance.now();
+      }
+    }
+  }
+  const SRC = { raw: 'eventos crudos', move: 'eventos agrupados', mouse: 'mousemove básico' };
+  let src = null;
+  function onPointer(e, kind) {
+    if (e.pointerType && e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
+    const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
+    if (list && list.length) { for (const c of list) mSample(c.timeStamp); }
+    else mSample(e.timeStamp);
+    if (src !== kind) { src = kind; $('srcInfo').textContent = SRC[kind]; }
+  }
+  let lastRaw = -1e9;
+  if ('onpointerrawupdate' in window) {
+    window.addEventListener('pointerrawupdate', e => { lastRaw = performance.now(); onPointer(e, 'raw'); }, { passive: true });
+  }
+  if ('PointerEvent' in window) {
+    window.addEventListener('pointermove', e => { if (performance.now() - lastRaw > 150) onPointer(e, 'move'); }, { passive: true });
+  } else {
+    window.addEventListener('mousemove', e => onPointer(e, 'mouse'), { passive: true });
+  }
+
+  function mFrame(now) {
+    const cutoff = now - 1000;
+    while (M.head < M.t.length && M.t[M.head] < cutoff) M.head++;
+    if (M.head > 8192) { M.t = M.t.slice(M.head); M.d = M.d.slice(M.head); M.head = 0; }
+    M.current = windowRate(now);
+    // Break the plotted line when movement stops.
+    if (M.current === null && M.trace.length && M.trace[M.trace.length - 1].hz !== null) M.trace.push({ t: now, hz: null });
+    while (M.trace.length && M.trace[0].t < now - 10500) M.trace.shift();
+  }
+
+  function updateMBadge() {
+    const locked = mousePad.dataset.locked === 'true';
+    if (locked) { mBadge.hidden = false; mBadge.dataset.tone = 'live'; mBadge.textContent = 'Puntero bloqueado · Esc para salir'; }
+    else if (M.count === 0) { mBadge.hidden = false; mBadge.dataset.tone = ''; mBadge.textContent = 'Ejemplo · ratón de 1000 Hz'; }
+    else mBadge.hidden = true;
+  }
+
+  function mUI() {
+    const cur = M.current;
+    if (cur !== null) {
+      mNow.textContent = fmt(cur); mNow.classList.remove('stale');
+      mMarker.hidden = false; mMarker.style.left = pos(cur) + '%';
+      if (!mHint.hidden) { mHint.hidden = true; updateMBadge(); }
+    } else if (M.count) mNow.classList.add('stale');
+    mCount.textContent = fmt(M.count);
+
+    if (M.rates.length >= 20) {
+      M.sustained = pct(M.rates, 0.95);
+      mPeak.textContent = fmt(M.sustained) + ' Hz';
+      mInt.textContent = msText(1000 / M.sustained);
+    }
+    let state = 'idle', text = 'Sin medir', det = null;
+    if (M.count) { state = 'busy'; text = 'Midiendo…'; }
+    if (M.motion >= 1500 && M.sustained) {
+      det = snap(M.sustained, 1.2);
+      if (det) { state = 'ok'; text = 'Detectado: ' + det + ' Hz'; }
+      else { state = 'warn'; text = '≈ ' + fmt(M.sustained) + ' Hz · no estándar'; }
+    }
+    setVerdict(mVerdict, state, text);
+    if (!lockError) {
+      if (state === 'warn') note(mNote, 'El valor no coincide con una frecuencia estándar. Mueve el ratón más rápido y en círculos amplios, o prueba «Bloquear puntero».');
+      else if (!noMouse || M.count) note(mNote, '');
+    }
+    if (det !== M.detected) {
+      M.detected = det; markScale(mScale, det); markRef(); mDirty = true;
+      if (det) announce('Ratón: ' + det + ' Hz detectados.');
+    }
+  }
+
+  const EX_M = (() => {
+    const a = []; let s = 7;
+    const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i <= 300; i++) {
+      const ago = 10000 - i * (10000 / 300);
+      let hz;
+      if ((ago > 7400 && ago < 8200) || ago < 350) hz = null;
+      else if (ago >= 7000 && ago <= 7400) hz = 1000 - (ago - 7000) + r() * 20;
+      else hz = 982 + r() * 30;
+      a.push({ ago, hz });
+    }
+    return a;
+  })();
+
+  function drawMouse(now) {
+    const { ctx, w, h } = fitCanvas(mCanvas);
+    ctx.clearRect(0, 0, w, h);
+    const L = 44, R = 12, T = 14, B = 24, pw = w - L - R, ph = h - T - B;
+    if (pw <= 0 || ph <= 0) return;
+    const lo = Math.log10(90), hi = Math.log10(10000);
+    const y = hz => T + (1 - (Math.log10(Math.min(10000, Math.max(90, hz))) - lo) / (hi - lo)) * ph;
+    const x = t => L + pw - ((now - t) / 10000) * pw;
+    ctx.font = MONO; ctx.lineWidth = 1;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (const s of STD) {
+      const yy = Math.round(y(s)) + 0.5, on = s === M.detected;
+      ctx.strokeStyle = on ? C.accent : C.grid; ctx.setLineDash(on ? [5, 4] : []);
+      hline(ctx, L, L + pw, yy);
+      ctx.fillStyle = on ? C.accent : C.muted; ctx.fillText(String(s), L - 8, yy);
+    }
+    ctx.setLineDash([]);
+    ctx.strokeStyle = C.line; hline(ctx, L, L + pw, T + ph + 0.5);
+    ctx.textBaseline = 'alphabetic'; ctx.fillStyle = C.muted;
+    ctx.textAlign = 'left'; ctx.fillText('−10 s', L, h - 7);
+    ctx.textAlign = 'center'; ctx.fillText('−5 s', L + pw / 2, h - 7);
+    ctx.textAlign = 'right'; ctx.fillText('ahora', L + pw, h - 7);
+
+    const example = M.count === 0;
+    const pts = example ? EX_M.map(p => ({ t: now - p.ago, hz: p.hz })) : M.trace;
+    const segs = []; let cur = null;
+    for (const p of pts) {
+      if (p.hz == null || now - p.t > 10000) { cur = null; continue; }
+      if (!cur) { cur = []; segs.push(cur); }
+      cur.push([x(p.t), y(p.hz)]);
+    }
+    ctx.globalAlpha = example ? 0.5 : 1;
+    for (const sg of segs) {
+      if (sg.length < 2) continue;
+      ctx.beginPath(); ctx.moveTo(sg[0][0], T + ph);
+      for (const [a, b] of sg) ctx.lineTo(a, b);
+      ctx.lineTo(sg[sg.length - 1][0], T + ph); ctx.closePath();
+      ctx.fillStyle = C['accent-soft']; ctx.fill();
+      ctx.beginPath();
+      sg.forEach(([a, b], i) => (i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)));
+      ctx.strokeStyle = C.accent; ctx.lineWidth = 1.75; ctx.lineJoin = 'round'; ctx.stroke();
+    }
+    const lastSeg = segs[segs.length - 1];
+    if (!example && M.current !== null && lastSeg && lastSeg.length) {
+      const [a, b] = lastSeg[lastSeg.length - 1];
+      ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(a, b, 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* Pointer lock: keeps the cursor from hitting the screen edge and, where
+     supported, asks for raw (unaccelerated) input. */
+  if (!('requestPointerLock' in mousePad)) lockBtn.hidden = true;
+  function lockFailed() {
+    lockError = true;
+    note(mNote, 'El navegador no permitió bloquear el puntero. La medición funciona igual sin bloquearlo.');
+  }
+  lockBtn.addEventListener('click', async () => {
+    if (document.pointerLockElement === mousePad) { document.exitPointerLock(); return; }
+    lockError = false;
+    try { await mousePad.requestPointerLock({ unadjustedMovement: true }); }
+    catch (err) {
+      try { await mousePad.requestPointerLock(); } catch (err2) { lockFailed(); }
+    }
+  });
+  document.addEventListener('pointerlockerror', lockFailed);
+  document.addEventListener('pointerlockchange', () => {
+    const locked = document.pointerLockElement === mousePad;
+    mousePad.dataset.locked = String(locked);
+    lockBtn.setAttribute('aria-pressed', String(locked));
+    lockBtn.textContent = locked ? 'Puntero bloqueado' : 'Bloquear puntero';
+    if (locked) { lockError = false; note(mNote, ''); }
+    updateMBadge();
+  });
+  $('resetMouse').addEventListener('click', resetM);
+
+  /* =========================================================
+     CH2 · Teclado
+     A keyboard only reports when something changes, so the rate can't be
+     counted. Pressing several keys at once spreads them over consecutive
+     USB reports; the gaps between events then land on multiples of the
+     polling interval (8 ms at 125 Hz, 1 ms at 1000 Hz). We look for the
+     largest standard interval that most gaps are a multiple of.
+     ========================================================= */
+  const keyPad = $('keyPad'), kCanvas = $('kCanvas');
+  const kNow = $('kNow'), kVerdict = $('kVerdict'), kConf = $('kConf'), kUseful = $('kUseful'), kEvents = $('kEvents');
+  const kHint = $('kHint'), kBadge = $('kBadge'), kNote = $('kNote'), kKeys = $('kKeys');
+  const SAME = Math.max(0.3, 1.5 * RES);              // gaps below this = same USB report
+  const CANDS = [8, 4, 2, 1, 0.5].filter(T => T >= 5 * RES);
+  const NEED = 20;
+  const K = {};
+
+  function estimate(xs) {
+    const n = xs.length;
+    if (n < NEED) return { state: 'collect', n };
+    for (const T of CANDS) {
+      const tol = Math.max(0.2 * T, RES);
+      let fit = 0;
+      for (const d of xs) { const k = Math.max(1, Math.round(d / T)); if (Math.abs(d - k * T) <= tol) fit++; }
+      const f = fit / n;
+      if (f >= 0.75) return { state: 'ok', T, hz: 1000 / T, f, n, conf: f >= 0.9 && n >= 40 ? 'Alta' : 'Media' };
+    }
+    // No clean grid. Gaps between separate reports can't be shorter than the
+    // polling interval, so short gaps still give a lower bound.
+    const p05 = pct(xs, 0.05);
+    let bound = null;
+    for (const T of CANDS) if (p05 < 0.9 * T) bound = T;
+    if (bound) return { state: 'above', hz: 1000 / bound, T: bound, n };
+    const raw = 1000 / p05;
+    return { state: 'low', hz: snap(raw, 1.3) || raw, n };
+  }
+
+  function resetK() {
+    Object.assign(K, { last: null, xs: [], events: 0, keys: [], est: null });
+    kKeys.textContent = '';
+    kUI(); updateKHint(); markRef(); kDirty = true;
+  }
+
+  function updateKHint() {
+    const armed = keyPad.dataset.armed === 'true';
+    if (K.events === 0) {
+      kHint.hidden = false;
+      kHint.textContent = armed ? 'Listo. Presiona de golpe 4 a 6 teclas a la vez, unas 10 veces.' : 'Haz clic aquí para activar la prueba del teclado.';
+    } else kHint.hidden = true;
+    if (K.xs.length === 0) { kBadge.dataset.tone = ''; kBadge.textContent = 'Ejemplo · teclado de 125 Hz'; }
+    else if (armed) { kBadge.dataset.tone = 'live'; kBadge.textContent = 'Escuchando'; }
+    else { kBadge.dataset.tone = ''; kBadge.textContent = 'En pausa · clic aquí'; }
+  }
+
+  function keyLabel(code) {
+    const map = { Space: 'Espacio', Enter: 'Enter', Backspace: '⌫', ShiftLeft: 'Shift', ShiftRight: 'Shift', ControlLeft: 'Ctrl', ControlRight: 'Ctrl', AltLeft: 'Alt', AltRight: 'AltGr', CapsLock: 'Bloq Mayús' };
+    return map[code] || String(code).replace(/^Key|^Digit|^Numpad/, '');
+  }
+
+  function kSample(ts, code, down) {
+    if (K.last !== null) {
+      const dt = ts - K.last;
+      if (dt >= SAME && dt <= 24) { K.xs.push(dt); if (K.xs.length > 3000) K.xs.splice(0, K.xs.length - 3000); }
+    }
+    K.last = ts; K.events++;
+    if (down) {
+      const c = document.createElement('span'); c.className = 'kc'; c.textContent = keyLabel(code);
+      kKeys.prepend(c);
+      while (kKeys.children.length > 10) kKeys.lastChild.remove();
+    }
+    const prev = K.est;
+    K.est = estimate(K.xs);
+    if (K.est.state === 'ok' && (!prev || prev.state !== 'ok' || prev.hz !== K.est.hz)) announce('Teclado: unos ' + fmt(K.est.hz) + ' Hz estimados.');
+    kDirty = true;
+    kUI(); updateKHint();
+  }
+
+  function kUI() {
+    const e = K.est, n = K.xs.length;
+    kEvents.textContent = fmt(K.events);
+    kUseful.textContent = n < NEED ? fmt(n) + ' / ' + NEED : fmt(n);
+    let state = 'idle', text = 'Sin medir', big = '—', conf = '—', det = null, msg = '';
+    if (K.events > 0 && (!e || e.state === 'collect')) { state = 'busy'; text = 'Midiendo…'; }
+    else if (e && e.state === 'ok') {
+      state = 'ok'; det = e.hz; big = fmt(e.hz); conf = e.conf + ' · ' + fmt(e.f * 100) + ' %';
+      text = 'Estimado: ' + fmt(e.hz) + ' Hz';
+    } else if (e && e.state === 'above') {
+      state = 'warn'; big = '>' + fmt(e.hz); conf = 'Baja'; text = 'Más de ' + fmt(e.hz) + ' Hz';
+      msg = 'Hay intervalos más cortos que ' + msText(e.T) + ', así que tu teclado va a más de ' + fmt(e.hz) + ' Hz. Desde el navegador no se puede precisar más.';
+    } else if (e && e.state === 'low') {
+      state = 'warn'; big = '≈' + fmt(e.hz); conf = 'Baja'; text = 'Sin patrón claro';
+      msg = 'Los intervalos no forman un patrón claro. Presiona grupos de 4 a 6 teclas a la vez, de golpe, varias veces.';
+    }
+    if (!msg && RES >= 0.5) msg = 'Este navegador redondea el tiempo a ' + $('clockRes').textContent + ', así que la estimación del teclado es limitada. Chrome o Edge dan mejor resultado.';
+    kNow.textContent = big;
+    kConf.textContent = conf;
+    setVerdict(kVerdict, state, text);
+    note(kNote, msg);
+    markScale(kScale, det);
+    markRef();
+  }
+
+  keyPad.addEventListener('focus', () => { keyPad.dataset.armed = 'true'; updateKHint(); });
+  keyPad.addEventListener('blur', () => { keyPad.dataset.armed = 'false'; K.last = null; updateKHint(); });
+  keyPad.addEventListener('keydown', e => {
+    if (e.key === 'Tab') return;
+    if (e.key === 'Escape') { keyPad.blur(); return; }
+    e.preventDefault();
+    if (e.repeat) return;
+    kSample(e.timeStamp, e.code || e.key, true);
+  });
+  keyPad.addEventListener('keyup', e => {
+    if (e.key === 'Tab' || e.key === 'Escape') return;
+    e.preventDefault();
+    kSample(e.timeStamp, e.code || e.key, false);
+  });
+  $('resetKeys').addEventListener('click', resetK);
+
+  const EX_K = (() => {
+    const a = []; let s = 11;
+    const r = () => (s = (s * 16807) % 2147483647) / 2147483647 - 0.5;
+    for (let i = 0; i < 46; i++) a.push(8 + r() * 0.3);
+    for (let i = 0; i < 17; i++) a.push(16 + r() * 0.3);
+    for (let i = 0; i < 3; i++) a.push(4 + r() * 0.3);
+    return a;
+  })();
+
+  const BW = 0.25, XMAX = 17;
+  function drawKeys() {
+    const { ctx, w, h } = fitCanvas(kCanvas);
+    ctx.clearRect(0, 0, w, h);
+    const L = 16, R = 22, T = 44, B = 24, pw = w - L - R, ph = h - T - B;
+    if (pw <= 0 || ph <= 0) return;
+    const x = ms => L + (ms / XMAX) * pw;
+    ctx.lineWidth = 1; ctx.strokeStyle = C.grid;
+    for (let m = 0; m <= 17; m++) vline(ctx, Math.round(x(m)) + 0.5, T, T + ph);
+    ctx.strokeStyle = C.line; hline(ctx, L, L + pw, T + ph + 0.5);
+    ctx.font = MONO; ctx.fillStyle = C.muted; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    for (let m = 0; m <= 16; m += 2) ctx.fillText(m === 16 ? '16 ms' : String(m), x(m), h - 7);
+
+    const example = K.xs.length === 0;
+    const data = example ? EX_K : K.xs;
+    const nb = Math.round(XMAX / BW) + 1, bins = new Array(nb).fill(0);
+    for (const d of data) { const i = Math.round(d / BW); if (i >= 0 && i < nb) bins[i]++; }
+    let max = 1; for (const b of bins) if (b > max) max = b;
+    const e = K.est;
+    if (!example && e && e.state === 'ok' && e.T >= 1) {
+      ctx.setLineDash([3, 4]); ctx.strokeStyle = C.accent;
+      for (let m = e.T; m <= XMAX; m += e.T) vline(ctx, Math.round(x(m)) + 0.5, T - 6, T + ph);
+      ctx.setLineDash([]);
+    }
+    const bwpx = Math.max(1.5, (pw / (XMAX / BW)) * 0.8);
+    ctx.globalAlpha = example ? 0.5 : 1; ctx.fillStyle = C.accent;
+    for (let i = 0; i < nb; i++) {
+      if (!bins[i]) continue;
+      const bh = Math.max(2, (bins[i] / max) * ph);
+      ctx.fillRect(x(i * BW) - bwpx / 2, T + ph - bh, bwpx, bh);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---------- Loop ---------- */
+  if ('ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => { mDirty = kDirty = true; });
+    ro.observe(mousePad); ro.observe(keyPad);
+  } else window.addEventListener('resize', () => { mDirty = kDirty = true; });
+
+  resetM();
+  resetK();
+
+  let lastUI = 0;
+  function loop() {
+    const now = performance.now();
+    mFrame(now);
+    if (mDirty || now - M.lastValid < 11000) { drawMouse(now); mDirty = false; }
+    if (kDirty) { drawKeys(); kDirty = false; }
+    if (now - lastUI > 120) { lastUI = now; mUI(); }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
